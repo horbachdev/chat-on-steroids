@@ -1633,6 +1633,37 @@ describe('handoff storage', () => {
 // ---------------------------------------------------------------- recorder
 
 describe('canonical recorder 1.8', () => {
+  it('redacts common credentials from stored tool arguments, results and summaries', async () => {
+    const github = `ghp_${'a'.repeat(36)}`;
+    const openai = `sk-proj-${'B'.repeat(32)}`;
+    const awsAccess = `AKIA${'C'.repeat(16)}`;
+    const awsSecret = 'D'.repeat(40);
+    const jwt = `eyJ${'e'.repeat(16)}.${'f'.repeat(16)}.${'g'.repeat(12)}`;
+    const digest = '0123456789abcdef'.repeat(4);
+
+    const call = await recordToolCall({
+      tool: 'exec_command',
+      args: {
+        cmd: `GH_TOKEN=${github} OPENAI_API_KEY=${openai} deploy`,
+        nested: { apiKey: openai }
+      },
+      content: [{
+        type: 'text',
+        text: `AWS_ACCESS_KEY_ID=${awsAccess}\nAWS_SECRET_ACCESS_KEY=${awsSecret}\nAuthorization: Bearer ${jwt}\nsha256=${digest}`
+      }],
+      outcome: 'process_exit_nonzero',
+      durationMs: 1,
+      startedAt: Date.now(),
+      requestId: null
+    });
+
+    expect(call).not.toBeNull();
+    const durable = JSON.stringify(call);
+    for (const secret of [github, openai, awsAccess, awsSecret, jwt]) expect(durable).not.toContain(secret);
+    expect(durable).toContain('<redacted>');
+    expect(durable).toContain(digest);
+  });
+
   it('lets the store deduplicate repeated recorder assets instead of shadow-counting the same bytes toward quota', async () => {
     const conversationId = `conv-dedup-shot-${Date.now()}`;
     const sessionId = await sessionForConversation(conversationId);

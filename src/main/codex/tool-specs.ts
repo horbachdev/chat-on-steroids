@@ -90,7 +90,7 @@ export const EXEC_COMMAND_SHELL_DESCRIPTION = "Shell binary to launch. Defaults 
 export const EXEC_COMMAND_LOGIN_DESCRIPTION =
   IS_WINDOWS
     ? 'True loads the shell profile; false disables it. Defaults to false on Windows for deterministic, faster commands.'
-    : 'True runs the shell with -l/-i semantics; false disables them. Defaults to true.';
+    : 'True runs the shell with -l/-i semantics; false disables them. Defaults to false so profiles cannot replace the scrubbed environment.';
 
 export const WRITE_STDIN_DESCRIPTION =
   'Writes characters to an existing unified exec session and returns recent output. Keep polling a returned session ID until its terminal result; after a transient wait failure, retry this same session ID rather than starting replacement work.';

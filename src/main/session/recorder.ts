@@ -1014,17 +1014,65 @@ async function storeText(
  * agent identity. Writing one into events.jsonl would publish it to session_history, to the
  * Activity feed the extension is sent, and to anything built from the raw log.
  */
-const CREDENTIAL_FIELDS = new Set(['secret']);
+const CREDENTIAL_FIELDS = new Set([
+  'apikey',
+  'accesstoken',
+  'authorization',
+  'clientsecret',
+  'credential',
+  'credentials',
+  'password',
+  'passwd',
+  'privatekey',
+  'refreshtoken',
+  'secret'
+]);
+const CREDENTIAL_FIELD_SUFFIX = /(?:^|_)(?:API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIALS?)$/i;
+const CREDENTIAL_ASSIGNMENT = /(\b(?:[A-Z][A-Z0-9_]*_(?:API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIALS?)|AUTHORIZATION)\b\s*(?::|=)\s*(?:(?:Bearer|Basic)\s+)?)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;|&]+)/gi;
+const RECORDED_CREDENTIAL_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,}\b/g, 'sk-<redacted>'],
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, '<github-token-redacted>'],
+  [/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, '<aws-access-key-redacted>'],
+  [/\b(?:xox[baprs]-[A-Za-z0-9-]{16,})\b/g, '<slack-token-redacted>'],
+  [/\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g, '<payment-key-redacted>'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b/g, '<jwt-redacted>']
+];
+
+function credentialField(field: string): boolean {
+  return CREDENTIAL_FIELDS.has(field.replace(/[-_]/g, '').toLowerCase()) || CREDENTIAL_FIELD_SUFFIX.test(field);
+}
+
+function redactCredentialText(text: string): string {
+  let redacted = text.replace(CREDENTIAL_ASSIGNMENT, '$1<redacted>');
+  for (const [pattern, replacement] of RECORDED_CREDENTIAL_PATTERNS) {
+    redacted = redacted.replace(pattern, replacement);
+  }
+  return redacted;
+}
+
+function redactCredentialValues(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === 'string') return redactCredentialText(value);
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return '<circular value not stored>';
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((entry) => redactCredentialValues(entry, seen));
+  const redacted: Record<string, unknown> = {};
+  for (const [field, entry] of Object.entries(value as Record<string, unknown>)) {
+    redacted[field] = credentialField(field) ? '<removed>' : redactCredentialValues(entry, seen);
+  }
+  return redacted;
+}
 
 /**
  * Removes the argument values that must never be written to disk.
  *
  * Environment overrides can carry credentials, a base64 blob is megabytes of noise,
  * and clipboard text is the one input the user may not have meant to hand over.
- * Everything else is stored verbatim: the point of the record is exact recovery.
+ * High-confidence credential field names, assignments and well-known token formats
+ * are scrubbed recursively as a final guard. Everything else stays exact for recovery.
  */
 function redactArgs(tool: string, args: unknown): unknown {
-  if (!args || typeof args !== 'object') return args;
+  if (!args || typeof args !== 'object') return redactCredentialValues(args);
   const copy: Record<string, unknown> = { ...(args as Record<string, unknown>) };
   if (copy['env'] && typeof copy['env'] === 'object') {
     copy['env'] = Object.fromEntries(Object.keys(copy['env'] as object).map((key) => [key, '***']));
@@ -1044,17 +1092,18 @@ function redactArgs(tool: string, args: unknown): unknown {
     });
   }
   for (const field of Object.keys(copy)) {
-    if (CREDENTIAL_FIELDS.has(field)) copy[field] = '<removed>';
+    if (credentialField(field)) copy[field] = '<removed>';
   }
-  return copy;
+  return redactCredentialValues(copy);
 }
 
 function redactResult(tool: string, text: string): string {
   // The other half of the clipboard rule: what was read comes back as its own line in
   // computer's reply, and only that line is dropped, so the rest of the result — which
   // actions ran, where the pointer ended up — still says what happened.
+  let redacted = text;
   if (tool === 'computer' && text.includes('Clipboard read ')) {
-    return text
+    redacted = text
       .split('\n')
       .map((line) =>
         line.startsWith('Clipboard read ')
@@ -1063,7 +1112,7 @@ function redactResult(tool: string, text: string): string {
       )
       .join('\n');
   }
-  return text;
+  return redactCredentialText(redacted);
 }
 
 function safeJson(value: unknown): string {
@@ -1245,6 +1294,7 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
     }
 
     const textParts = input.content.filter((part) => part.type === 'text').map((part) => part.text ?? '');
+    const storedArgs = redactArgs(input.tool, input.args);
     // Scrub before summarisation too. A failed tool may put the first line of its
     // result into ActivitySummary.detail; scrubbing only in storeText would keep the
     // raw capability out of args/result while still leaking it through that summary to
@@ -1259,7 +1309,7 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
 
     const summary: ActivitySummary = summarizeToolCall({
       tool: input.tool,
-      args: input.args,
+      args: storedArgs,
       evidence,
       outcome: input.outcome,
       durationMs: input.durationMs,
@@ -1278,7 +1328,7 @@ async function fileToolCall(input: ToolCallInput, target: Target): Promise<ToolC
           : target.conversationId && input.requestId
             ? 'request_id'
             : 'unattributed',
-      args: await storeText(sessionId, safeJson(redactArgs(input.tool, input.args)), MAX_TOOL_ARGS_CHARS),
+      args: await storeText(sessionId, safeJson(storedArgs), MAX_TOOL_ARGS_CHARS),
       result: await storeText(sessionId, resultText, MAX_TOOL_RESULT_CHARS),
       outcome: input.outcome,
       durationMs: input.durationMs,

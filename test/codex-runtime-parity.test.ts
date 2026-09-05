@@ -21,6 +21,7 @@ import {
   deriveExecArgs,
   getShell,
   getShellByModelProvidedPath,
+  loginShellMode,
   posixShellPreference,
   shlexJoin
 } from '../src/main/codex/shell.js';
@@ -96,6 +97,12 @@ describe('Codex unified exec runtime parity', () => {
       '-Command',
       "Write-Output 'x'"
     ]);
+  });
+
+  it('keeps shell profiles opt-in after the child environment is scrubbed', () => {
+    expect(loginShellMode(undefined)).toBe(false);
+    expect(loginShellMode(false)).toBe(false);
+    expect(loginShellMode(true)).toBe(true);
   });
 
   it.runIf(process.platform === 'win32')('keeps explicit powershell and pwsh names distinct', () => {

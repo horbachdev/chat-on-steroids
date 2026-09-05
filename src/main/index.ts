@@ -69,6 +69,7 @@ import {
 } from './window-lifecycle.js';
 import { trayGuidArgsForPlatform, trayImageSpec } from './tray-image.js';
 import { browserWindowIconPath } from './window-icon.js';
+import { developmentRendererUrl } from './renderer-url.js';
 
 /** Durable state file holding the multi-agent run. Hashes only, never credentials. */
 const SWARM_STATE = 'swarm';
@@ -153,8 +154,9 @@ function createWindow(): void {
     window = null;
   });
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void window.loadURL(process.env.ELECTRON_RENDERER_URL);
+  const rendererUrl = developmentRendererUrl(app.isPackaged);
+  if (rendererUrl) {
+    void window.loadURL(rendererUrl);
   } else {
     void window.loadFile(path.join(__dirname, '../renderer/index.html'));
   }

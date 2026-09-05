@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { pathEntries } from '../src/main/env.js';
+import { envValue, pathEntries } from '../src/main/env.js';
 import {
   DEFAULT_TIMEOUT_MS,
   ExecError,
@@ -247,15 +247,40 @@ describe('the environment prepared for a child process', () => {
     expect(pathEntries(prepared.env ?? {}).length).toBeGreaterThan(0);
   });
 
-  it('does not pass connector secrets on, whatever case they arrived in', () => {
-    const held = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = 'sk-should-not-travel';
+  it('inherits only process plumbing and strips common credentials in depth', () => {
+    const inherited = {
+      OPENAI_API_KEY: 'sk-should-not-travel',
+      GH_TOKEN: 'ghp_should_not_travel',
+      AWS_ACCESS_KEY_ID: 'AKIA0000000000000000',
+      AWS_SECRET_ACCESS_KEY: 'aws-secret-should-not-travel',
+      NODE_OPTIONS: '--require /tmp/ambient-injection.js',
+      UNRELATED_AMBIENT_VALUE: 'must-not-travel'
+    };
+    const held = new Map(Object.keys(inherited).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, inherited);
     try {
       const env = childEnv();
-      expect(Object.keys(env).some((key) => key.toLowerCase() === 'openai_api_key')).toBe(false);
+      expect(envValue(env, 'PATH')).toBeTruthy();
+      if (process.env.HOME) expect(envValue(env, 'HOME')).toBe(process.env.HOME);
+      for (const key of Object.keys(inherited)) expect(envValue(env, key)).toBeUndefined();
     } finally {
-      if (held === undefined) delete process.env.OPENAI_API_KEY;
-      else process.env.OPENAI_API_KEY = held;
+      for (const [key, value] of held) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('allows a validated internal override after inherited secrets are removed', () => {
+    const held = process.env.CONTROL_PLANE_API_KEY;
+    process.env.CONTROL_PLANE_API_KEY = 'ambient-secret';
+    try {
+      expect(envValue(childEnv(), 'CONTROL_PLANE_API_KEY')).toBeUndefined();
+      expect(envValue(childEnv({ CONTROL_PLANE_API_KEY: 'explicit-tunnel-secret' }), 'CONTROL_PLANE_API_KEY'))
+        .toBe('explicit-tunnel-secret');
+    } finally {
+      if (held === undefined) delete process.env.CONTROL_PLANE_API_KEY;
+      else process.env.CONTROL_PLANE_API_KEY = held;
     }
   });
 });

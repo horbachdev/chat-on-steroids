@@ -273,6 +273,11 @@ export function deriveExecArgs(shell: DetectedShell, command: string, useLoginSh
   }
 }
 
+/** Profiles are opt-in because they can replace the already-scrubbed child environment. */
+export function loginShellMode(requested: boolean | undefined): boolean {
+  return requested ?? false;
+}
+
 const POWERSHELL_FLAGS = ['-nologo', '-noprofile', '-command', '-c'];
 
 /** Prefixed command for PowerShell calls to request UTF-8 console output. */

@@ -1,6 +1,7 @@
 /**
- * Optional command execution. Disabled by default; enabled only by an explicit
- * checkbox in the app.
+ * Capability-gated command execution. A fresh install has the Command capability
+ * selected, but no approved roots and no automatic connection; the tool becomes
+ * reachable only after the user approves a folder and connects the app.
  *
  * Three deliberate choices here:
  *  - PowerShell scripts are passed with -EncodedCommand, so no quoting or escaping
@@ -64,14 +65,121 @@ export interface ExecResult {
   durationMs: number;
 }
 
-/** Environment variables we never hand to a child process. */
-const SECRET_ENV_KEYS = [
+/**
+ * Ambient values a child may inherit from the desktop process.
+ *
+ * Keep this deliberately boring. Authentication agents, package-manager settings,
+ * cloud configuration and runtime injection knobs are capabilities, not process
+ * plumbing. Callers that intentionally need one value can still supply it through
+ * the validated override argument below.
+ */
+const INHERITED_ENV_KEYS = new Set([
+  'ALLUSERSPROFILE',
+  'APPDATA',
+  'CARGO_HOME',
+  'COLORTERM',
+  'COMMONPROGRAMFILES',
+  'COMMONPROGRAMFILES(X86)',
+  'COMMONPROGRAMW6432',
+  'COMSPEC',
+  'CONDA_DEFAULT_ENV',
+  'CONDA_PREFIX',
+  'DEVELOPER_DIR',
+  'FORCE_COLOR',
+  'GOBIN',
+  'GOPATH',
+  'GOROOT',
+  'HOMEDRIVE',
+  'HOME',
+  'HOMEPATH',
+  'JAVA_HOME',
+  'JDK_HOME',
+  'LANG',
+  'LANGUAGE',
+  'LOCALAPPDATA',
+  'LOGNAME',
+  'NO_COLOR',
+  'NUMBER_OF_PROCESSORS',
+  'OS',
+  'PATH',
+  'PATHEXT',
+  'PROCESSOR_ARCHITECTURE',
+  'PROCESSOR_IDENTIFIER',
+  'PROCESSOR_LEVEL',
+  'PROCESSOR_REVISION',
+  'PROGRAMDATA',
+  'PROGRAMFILES',
+  'PROGRAMFILES(X86)',
+  'PROGRAMW6432',
+  'PSMODULEPATH',
+  'RUSTUP_HOME',
+  'SDKROOT',
+  'SHELL',
+  'SYSTEMDRIVE',
+  'SYSTEMROOT',
+  'TEMP',
+  'TEMPDIR',
+  'TERM',
+  'TERM_PROGRAM',
+  'TERM_PROGRAM_VERSION',
+  'TMP',
+  'TMPDIR',
+  'TZ',
+  'USER',
+  'USERDOMAIN',
+  'USERNAME',
+  'USERPROFILE',
+  'VIRTUAL_ENV',
+  'WINDIR',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_RUNTIME_DIR',
+  'XDG_STATE_HOME',
+  '__CF_USER_TEXT_ENCODING'
+]);
+
+/**
+ * Defence in depth behind the allowlist. A later allowlist expansion must not
+ * accidentally turn a familiar credential name back into inherited child state.
+ */
+const SECRET_ENV_KEYS = new Set([
+  'ANTHROPIC_API_KEY',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SECURITY_TOKEN',
+  'AWS_SESSION_TOKEN',
+  'AZURE_CLIENT_SECRET',
+  'CLOUDFLARE_API_KEY',
+  'CLOUDFLARE_API_TOKEN',
   'CONTROL_PLANE_API_KEY',
+  'DOCKER_AUTH_CONFIG',
+  'GEMINI_API_KEY',
+  'GH_TOKEN',
+  'GITHUB_PAT',
+  'GITHUB_TOKEN',
+  'GOOGLE_API_KEY',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'HF_TOKEN',
+  'HUGGING_FACE_HUB_TOKEN',
+  'KUBECONFIG',
+  'NODE_AUTH_TOKEN',
+  'NPM_TOKEN',
   'OPENAI_API_KEY',
   'OPENAI_ADMIN_KEY',
+  'OPENROUTER_API_KEY',
   'CLOUDFLARED_TOKEN',
   'CLOUDFLARED_TUNNEL_TOKEN'
-];
+]);
+
+const SECRET_ENV_KEY_SUFFIX = /(?:^|_)(?:API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIALS?)$/i;
+
+function mayInheritEnvironmentKey(key: string): boolean {
+  const upper = key.toUpperCase();
+  return (INHERITED_ENV_KEYS.has(upper) || upper.startsWith('LC_')) &&
+    !SECRET_ENV_KEYS.has(upper) &&
+    !SECRET_ENV_KEY_SUFFIX.test(upper);
+}
 
 function validateEnvironment(overrides: CommandEnvironment | undefined): void {
   if (!overrides) return;
@@ -101,12 +209,17 @@ function validateEnvironment(overrides: CommandEnvironment | undefined): void {
  */
 export function childEnv(overrides?: CommandEnvironment): NodeJS.ProcessEnv {
   validateEnvironment(overrides);
-  const env = normalizeEnvironment(process.env);
+  const inherited = normalizeEnvironment(process.env);
+  const env = Object.fromEntries(
+    Object.entries(inherited).filter(([key]) => mayInheritEnvironmentKey(key))
+  );
   const ripgrep = locateRipgrep();
   if (ripgrep) prependPath(env, path.dirname(ripgrep));
-  // Windows environment keys are case-insensitive. Remove every inherited spelling of
-  // connector/control-plane secrets before applying values explicitly supplied by the caller.
+  // Keep the explicit blocklist after the allowlist as a second barrier. Windows environment
+  // keys are case-insensitive, so delete every spelling before caller-supplied overrides.
   for (const secret of SECRET_ENV_KEYS) deleteEnvValue(env, secret);
+  // Explicit values are an internal capability grant (the pinned tunnel client needs one),
+  // not ambient inheritance. They remain validated, bounded and applied only by the caller.
   if (overrides) applyEnvOverrides(env, overrides);
   ensureUsablePath(env);
   return env as NodeJS.ProcessEnv;

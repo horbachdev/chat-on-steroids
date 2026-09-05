@@ -69,7 +69,7 @@ import {
   DEFAULT_TTY,
   DEFAULT_WRITE_STDIN_YIELD_TIME_MS
 } from '../codex/unified-exec-constants.js';
-import { defaultUserShell, deriveExecArgs, getShellByModelProvidedPath, shlexJoin } from '../codex/shell.js';
+import { defaultUserShell, deriveExecArgs, getShellByModelProvidedPath, loginShellMode, shlexJoin } from '../codex/shell.js';
 import {
   APPLY_PATCH_ARGUMENT_DESCRIPTION,
   APPLY_PATCH_DESCRIPTION,
@@ -735,11 +735,12 @@ export function registerCoreTools(reg: SurfaceRegistrar): void {
           const commandDetail = isBatch
             ? `[batch ${rawCommands.length}] ${rawCommands.join(' ; ')}`
             : rawCommands[0]!;
-          // PowerShell profiles are user-custom startup programs. Loading them for every
-          // connector command adds arbitrary output/aliases and can spend seconds on network
-          // profile work before the requested command even begins. Keep explicit login=true,
-          // but make the deterministic/no-profile path the Windows default.
-          const useLoginShell = input.login ?? process.platform !== 'win32';
+          // Shell profiles are user-custom startup programs. Loading one after childEnv() has
+          // scrubbed ambient credentials can re-export those credentials and can replace the
+          // pinned-tool PATH before the requested command begins. Keep explicit login=true for
+          // callers that deliberately need profile semantics, but default every platform to the
+          // deterministic environment this process just prepared.
+          const useLoginShell = loginShellMode(input.login);
           const command = deriveExecArgs(shell, boundCommand, useLoginShell);
           try {
             // Current Codex intercepts an explicit `apply_patch` shell invocation before spawning
