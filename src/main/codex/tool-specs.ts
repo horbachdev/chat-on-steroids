@@ -89,8 +89,16 @@ export const EXEC_COMMAND_SHELL_DESCRIPTION = "Shell binary to launch. Defaults 
 
 export const EXEC_COMMAND_LOGIN_DESCRIPTION =
   IS_WINDOWS
-    ? 'True loads the shell profile; false disables it. Defaults to false on Windows for deterministic, faster commands.'
-    : 'True runs the shell with -l/-i semantics; false disables them. Defaults to false so profiles cannot replace the scrubbed environment.';
+    ? 'True loads the shell profile; false disables it. Defaults to false on Windows for deterministic, ' +
+      'faster commands. Set to true only when the command depends on PATH or environment set up by that ' +
+      'profile — for example nvm-windows, pyenv-win, or a custom PowerShell profile providing a tool shim.'
+    : 'True runs the shell with -l/-i semantics, loading profile files (.bash_profile/.zprofile/.profile/' +
+      '.zshrc) before the command runs; false skips them. Defaults to false so profile scripts cannot ' +
+      'reintroduce environment variables that were deliberately scrubbed for this process. Set to true ' +
+      'when the command needs PATH or environment entries that only exist after profile loading — most ' +
+      'commonly version managers such as nvm, rbenv, pyenv, or rustup, where node/ruby/python/cargo are ' +
+      'not resolvable otherwise. If a plain command fails with "command not found" for a tool you expect ' +
+      'to be installed, retry once with login: true before concluding it is missing.';
 
 export const WRITE_STDIN_DESCRIPTION =
   'Writes characters to an existing unified exec session and returns recent output. Keep polling a returned session ID until its terminal result; after a transient wait failure, retry this same session ID rather than starting replacement work.';
